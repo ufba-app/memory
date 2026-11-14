@@ -92,7 +92,8 @@ export const adapters = {
   sh: {
     name: 'sh',
     file: path.join(repo, 'installer', 'ufba-memory.sh'),
-    platformKey: 'linux-x64',
+    // Windows (Git Bash) finge Linux x64; em Linux e macOS de verdade vale o proprio sistema.
+    get platformKey() { return process.platform === 'darwin' ? `macos-${process.arch === 'arm64' ? 'arm64' : 'x64'}` : 'linux-x64'; },
     manifestFileKey: 'install.sh',
     available: () => Boolean(findSh()),
     argv(a) {
@@ -129,7 +130,10 @@ export class World {
   removeStub(name) {
     for (const f of [name, name + '.exe']) fs.rmSync(path.join(this.bin, f), { force: true });
   }
-  get dataDir() { return this.adapter.name === 'ps1' ? path.join(this.local, 'ai-memory') : path.join(this.home, '.local', 'share', 'ai-memory'); }
+  get dataDir() {
+    if (this.adapter.name === 'ps1') return path.join(this.local, 'ai-memory');
+    return process.platform === 'darwin' ? path.join(this.home, 'Library', 'Application Support', 'ai-memory') : path.join(this.home, '.local', 'share', 'ai-memory');
+  }
   get binInstallDir() { return this.adapter.name === 'ps1' ? path.join(this.local, 'Programs', 'ai-memory') : path.join(this.home, '.local', 'lib', 'ai-memory'); }
   get stateFile() { return path.join(this.home, '.ufba', 'computer.json'); }
   get claudeDir() { return path.join(this.home, '.claude'); }
@@ -163,7 +167,7 @@ export class World {
       PATH: pathList.map((p) => path.normalize(p)).map(fixPath).join(sep),
       STUB_DIR: fixPath(this.stub), STUB_JS: fwd(STUB_JS), STUB_AIM_VERSION: '3.4.6',
       UFBA_INSTALLER_TEST: '1', UFBA_NO_BROWSER: '1', UFBA_POLL_SCALE_MS: '5',
-      UFBA_INSTALLER_TEST_OS: 'linux', UFBA_INSTALLER_TEST_ARCH: 'x86_64',
+      ...(isWin ? { UFBA_INSTALLER_TEST_OS: 'linux', UFBA_INSTALLER_TEST_ARCH: 'x86_64' } : {}),
       ...(fakes ? { UFBA_API_URL: fakes.apiUrl, UFBA_MEMORY_URL: fakes.memUrl } : {}),
       ...this.extraEnv, ...extra,
     };
@@ -178,7 +182,7 @@ export class World {
       artName = 'ai-memory-windows-x86_64.zip';
     } else {
       art = artifactBytes ?? makeTarGz(this.work, [['ai-memory', Buffer.from('#!/bin/sh\nexec node "$STUB_JS" ai-memory "$@"\n'), 0o755], ['hooks/readme.txt', Buffer.from('hooks de teste')]]);
-      artName = 'ai-memory-linux-x86_64.tar.gz';
+      artName = 'ai-memory-test.tar.gz';
     }
     fakes.addFile(artName, art);
     const entry = { url: `${fakes.apiUrl}/artifacts/${artName}`, sha256: badArtifactHash ? 'f'.repeat(64) : sha256(art) };

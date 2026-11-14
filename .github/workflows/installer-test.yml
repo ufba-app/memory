@@ -1,0 +1,32 @@
+# Testes do instalador (.ps1 e .sh), dos bootstraps, do build do release e do entrypoint da imagem.
+# Servidores falsos em 127.0.0.1 e stubs de `ai-memory`/`claude`: nada fala com a internet nem com servicos reais.
+#   windows-latest  roda o PowerShell 5.1 (powershell.exe) e o POSIX sh do Git Bash
+#   ubuntu-latest   roda o POSIX sh em Linux de verdade
+#   macos-latest    roda o POSIX sh em macOS de verdade (caminho de dados ~/Library/Application Support)
+name: installer-test
+
+on:
+  push:
+    paths: ['installer/**', 'install.ps1', 'install.sh', 'test/**', 'tools/**', 'docker/**', 'Dockerfile', 'VERSION', '.github/workflows/installer-test.yml']
+  pull_request:
+    paths: ['installer/**', 'install.ps1', 'install.sh', 'test/**', 'tools/**', 'docker/**', 'Dockerfile', 'VERSION', '.github/workflows/installer-test.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Testes
+        shell: bash
+        run: node --test "test/*.test.mjs"
