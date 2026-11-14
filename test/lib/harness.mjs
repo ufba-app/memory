@@ -193,8 +193,10 @@ export class World {
     };
     return entry;
   }
-  run(fakes, args = {}, { extraEnv = {}, stdin = '' } = {}) {
-    const [exe, argv] = this.adapter.cmd(this.adapter.file, this.adapter.argv(args));
+  run(fakes, args = {}, opts = {}) { return this.runScript(fakes, this.adapter.file, this.adapter.argv(args), opts); }
+  /** Roda QUALQUER script (instalador ou bootstrap) com o mesmo ambiente isolado; `argv` ja no formato do interpretador. */
+  runScript(fakes, file, argvIn, { extraEnv = {}, stdin = '' } = {}) {
+    const [exe, argv] = this.adapter.cmd(file, argvIn);
     return new Promise((resolve) => {
       const child = spawn(exe, argv, { env: this.env(fakes, extraEnv), cwd: this.work, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       let out = ''; let err = '';
