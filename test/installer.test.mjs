@@ -181,7 +181,7 @@ for (const adapter of Object.values(adapters)) {
 
     scenario('resposta perdida com computer.json existente: repete com o mesmo computer_id e rotaciona (sem duplicar)', {}, async (w, fakes) => {
       w.stubs('claude'); fs.mkdirSync(w.claudeDir, { recursive: true });
-      assert.equal((await w.run(fakes, { yes: true })).code, 0);
+      { const r0 = await w.run(fakes, { yes: true }); assert.equal(r0.code, 0, r0.all); }
       const id = w.state().computer_id;
       fakes.opts.lostResponses = 1;
       const r = await w.run(fakes, { yes: true });
@@ -300,7 +300,7 @@ for (const adapter of Object.values(adapters)) {
 
     scenario('desinstalar (fresh): remove MCP, hooks, chave gravada, programa e computer.json', {}, async (w, fakes) => {
       w.stubs('claude'); fs.mkdirSync(w.claudeDir, { recursive: true });
-      assert.equal((await w.run(fakes, { yes: true })).code, 0);
+      { const r0 = await w.run(fakes, { yes: true }); assert.equal(r0.code, 0, r0.all); }
       const r = await w.run(fakes, { uninstall: true, yes: true });
       assert.equal(r.code, 0, r.all);
       assert.equal(Object.values(w.mcp()).reduce((n, m) => n + Object.keys(m).length, 0), 0);
@@ -312,7 +312,7 @@ for (const adapter of Object.values(adapters)) {
     });
     scenario('desinstalar (profile): remove so o perfil ufba e o MCP; os hooks da pessoa ficam como estavam', {}, async (w, fakes) => {
       w.stubs('claude', 'ai-memory'); w.seedHooks(w.claudeDir); w.seedProfile('grimorio', [w.repos]);
-      assert.equal((await w.run(fakes, { yes: true, roots: [w.repos] })).code, 0);
+      { const r0 = await w.run(fakes, { yes: true, roots: [w.repos] }); assert.equal(r0.code, 0, r0.all); }
       const hooksBefore = fs.readFileSync(path.join(w.claudeDir, 'settings.json'));
       const r = await w.run(fakes, { uninstall: true, yes: true });
       assert.equal(r.code, 0, r.all);
