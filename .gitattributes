@@ -1,0 +1,8 @@
+# Os hashes do manifesto sao de bytes: o checkout nunca pode trocar os fins de linha.
+*.sh   text eol=lf
+*.ps1  text eol=lf
+*.mjs  text eol=lf
+*.yml  text eol=lf
+Dockerfile text eol=lf
+install.ps1 text eol=lf
+install.sh text eol=lf
