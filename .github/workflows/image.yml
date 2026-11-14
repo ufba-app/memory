@@ -1,12 +1,14 @@
-# Compila o ai-memory oficial (akitaonrails/ai-memory) na versão do arquivo VERSION, com o console de gestão
-# (--features management-ui), e publica em ghcr.io/ufba-app/ai-memory. O Railway só baixa essa imagem pronta.
-# Não há cópia do código do ai-memory aqui: a receita aponta para a tag oficial.
+# Compila o ai-memory oficial (akitaonrails/ai-memory) na versao do arquivo VERSION, com o console de gestao
+# (--features management-ui), e publica em ghcr.io/ufba-app/ai-memory. O Railway so baixa essa imagem pronta.
+# Duas etapas: (1) o ai-memory oficial, sem alteracoes, vira <versao>-base; (2) a camada deste repo (Dockerfile) poe o
+# modelo do embedder local DENTRO da imagem (fora de /data, que o volume sombreia) e publica <versao> e latest.
+# Nao ha copia do codigo do ai-memory aqui: a receita aponta para a tag oficial.
 name: image
 
 on:
   push:
     branches: [main]
-    paths: [VERSION, .github/workflows/image.yml]
+    paths: [VERSION, Dockerfile, docker/**, .github/workflows/image.yml]
   workflow_dispatch:
 
 permissions:
@@ -34,6 +36,10 @@ jobs:
           ref: ${{ steps.v.outputs.tag }}
           path: upstream
 
+      # Falha se o ai-memory da tag trocou o modelo do embedder (URL, arquivos ou sha256): o Dockerfile pina os mesmos.
+      - name: Conferir os pins do modelo do embedder
+        run: sh docker/check-model-pins.sh upstream/crates/ai-memory-llm/src/local.rs Dockerfile
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -42,18 +48,34 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v6
+      - name: ai-memory oficial (base)
+        uses: docker/build-push-action@v6
         with:
           context: upstream
           file: upstream/docker/Dockerfile
           platforms: linux/amd64
           build-args: AI_MEMORY_FEATURES=management-ui
           push: true
+          tags: ghcr.io/ufba-app/ai-memory:${{ steps.v.outputs.version }}-base
+          labels: |
+            org.opencontainers.image.source=https://github.com/ufba-app/memory
+            org.opencontainers.image.description=ai-memory ${{ steps.v.outputs.tag }} com management-ui (base)
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+
+      - name: Imagem final (base + modelo do embedder embarcado)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          build-args: BASE_IMAGE=ghcr.io/ufba-app/ai-memory:${{ steps.v.outputs.version }}-base
+          push: true
           tags: |
             ghcr.io/ufba-app/ai-memory:${{ steps.v.outputs.version }}
             ghcr.io/ufba-app/ai-memory:latest
           labels: |
             org.opencontainers.image.source=https://github.com/ufba-app/memory
-            org.opencontainers.image.description=ai-memory ${{ steps.v.outputs.tag }} com management-ui
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            org.opencontainers.image.description=ai-memory ${{ steps.v.outputs.tag }} com management-ui e modelo do embedder embarcado
+          cache-from: type=gha,scope=final
+          cache-to: type=gha,mode=max,scope=final
