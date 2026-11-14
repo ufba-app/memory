@@ -276,10 +276,334 @@ function Invoke-UfbaMemory {
     if ([version]$InstallerVersion -lt [version][string]$manifest.installer.minVersion) {
         Fail "este instalador ($InstallerVersion) e antigo demais (minimo $($manifest.installer.minVersion)). Baixe o atual em https://ufba.app/instalar."
     }
+    # Hash deste instalador: do proprio arquivo; ou, quando o bootstrap o roda em memoria, o hash que ELE ja conferiu.
     $self = $PSCommandPath
-    if (-not $self -or -not (Test-Path -LiteralPath $self)) { Fail 'nao consegui ler este proprio arquivo para conferir o hash; baixe o instalador e rode como arquivo.' }
+    if ($self -and (Test-Path -LiteralPath $self)) { $selfHash = Get-FileSha256 $self }
+    elseif ($env:UFBA_INSTALLER_SHA256 -match '^[0-9a-f]{64}
+        Fail 'o hash deste instalador nao confere com o manifesto da ufba.app. Nada foi instalado. Baixe de novo o instalador oficial.'
+    }
+    $aimVersion = [string]$manifest.aiMemory.version
+    $art = $manifest.aiMemory.artifacts.$platKey
+    if (-not $art -or -not $art.url -or -not $art.sha256) { Fail "o manifesto nao traz o ai-memory para $platKey." }
+    if (-not (Test-AllowedUrl ([string]$art.url))) { Fail 'URL do ai-memory no manifesto nao e https.' }
+
+    # ---- deteccao do modo (3) ----
+    $state = Read-State
+    $targetsAll = @(Get-ClaudeTargets)
+    $aim = $null
+    $cmdAim = Get-Command ai-memory -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmdAim) { $aim = $cmdAim.Source } elseif (Test-Path -LiteralPath $binExe) { $aim = $binExe }
+    $signals = @()
+    if ($cmdAim) { $signals += 'ai-memory no PATH' }
+    if (Test-Path -LiteralPath $binExe) { $signals += "programa em $binDir" }
+    if (Test-Path -LiteralPath $dataDir) { $signals += "pasta de dados $dataDir" }
+    if (Test-Path -LiteralPath (Join-Path $dataDir 'servers.toml')) { $signals += 'servers.toml' }
+    foreach ($t in $targetsAll) { if (Test-AimHooks $t.Dir) { $signals += "hooks do ai-memory em $($t.Label)" } }
+    $mode = if ($state -and ($state.install_mode -eq 'fresh' -or $state.install_mode -eq 'profile')) { [string]$state.install_mode } elseif ($signals.Count -gt 0) { 'profile' } else { 'fresh' }
+    Say ''
+    if ($mode -eq 'fresh') { Say ('Modo: fresh (nao ha ai-memory nesta maquina: vou instalar a versao ' + $aimVersion + ' e a ufba.app sera o servidor padrao).') }
+    else { Say 'Modo: profile (ja existe ai-memory aqui: o servidor padrao, a chave e o modo de captura dele NAO serao tocados; so registro o perfil "ufba").' }
+    if ($signals.Count -gt 0) { Say ('  sinais: ' + ($signals -join '; ')) }
+
+    # ---- profile: pre-condicoes (param ANTES de qualquer escrita ou login) ----
+    $existingProfiles = @()
+    if ($mode -eq 'profile') {
+        if (-not $aim) { return (Stop-Planned ("Encontrei sinais de um ai-memory existente (" + ($signals -join '; ') + "), mas nao achei o programa no PATH nem em $binDir.`nNao vou instalar outro por cima. Coloque o ai-memory $aimVersion no PATH (ou reinstale o seu) e rode de novo.")) }
+        $vr = Invoke-Native $aim @('--version')
+        if ($vr.Code -ne 0 -or $vr.Out -notmatch '(\d+\.\d+\.\d+)') { return (Stop-Planned "Nao consegui ler a versao do ai-memory em $aim.") }
+        $have = [version]$Matches[1]
+        if ($have -lt [version]$aimVersion) {
+            return (Stop-Planned ("O seu ai-memory e a versao $have, mais antiga que a $aimVersion que a ufba.app exige para o modo perfil.`nUma versao antiga ignora o perfil e mandaria a captura para o seu servidor padrao.`nEste instalador nunca atualiza o ai-memory de ninguem: atualize o seu por conta propria (ai-memory upgrade, ou baixe a $aimVersion em github.com/akitaonrails/ai-memory) e rode de novo.`nPrograma encontrado: $aim"))
+        }
+        $sl = Invoke-Native $aim @('--data-dir', $dataDir, 'server', 'list', '--json')
+        if ($sl.Code -eq 0) { $existingProfiles = @([regex]::Matches($sl.Out, '"name"\s*:\s*"([^"]+)"') | ForEach-Object { $_.Groups[1].Value }) }
+    }
+
+    # ---- 4. agentes ----
+    $targets = @()
+    Say ''
+    if ($targetsAll.Count -eq 0) { return (Stop-Planned 'Nao encontrei nenhum agente compativel (Claude Code ou contas do Maestri). Instale o Claude Code e rode de novo.') }
+    Say 'Agentes encontrados:'
+    foreach ($t in $targetsAll) {
+        $hooks = Test-AimHooks $t.Dir
+        if ($mode -eq 'profile' -and -not $hooks) {
+            Say "  - $($t.Label): SEM hooks do ai-memory; vou pular (instale os seus hooks com 'ai-memory install-hooks --apply' nessa conta e rode de novo)."
+            continue
+        }
+        if (Confirm-Item "  Conectar $($t.Label) ($($t.Dir))?") { $targets += $t } else { Say "  (pulado: $($t.Label))" }
+    }
+    foreach ($o in @('.codex', '.gemini', '.cursor')) {
+        if (Test-Path -LiteralPath (Join-Path $userHome $o)) { Say "  - $o encontrado, mas nao conectado: esse agente usa scripts que nao roteiam perfil de servidor." }
+    }
+    if ($targets.Count -eq 0) {
+        if ($mode -eq 'profile') { return (Stop-Planned 'Nenhum agente com hooks do ai-memory foi selecionado. O modo perfil so conecta agentes que ja tem os hooks do ai-memory.') }
+        return (Stop-Planned 'Nenhum agente selecionado.')
+    }
+
+    # ---- roots (profile) ----
+    $roots = @()
+    if ($mode -eq 'profile') {
+        foreach ($rr in $Root) {
+            foreach ($one in ($rr -split ',')) {
+                if (-not $one.Trim()) { continue }
+                $full = [IO.Path]::GetFullPath($one.Trim())
+                if (-not (Test-Path -LiteralPath $full -PathType Container)) { Fail "a pasta de -Root nao existe: $full" }
+                $roots += $full
+            }
+        }
+        $already = ($existingProfiles -contains 'ufba')
+        if ($roots.Count -eq 0 -and -not $already) {
+            if ($Yes) { Fail 'em -Yes o modo perfil exige -Root <pasta onde ficam os repositorios da ufba.app>.' }
+            Say ''
+            Say 'Um repositorio so pode escolher o perfil "ufba" se estiver dentro de uma pasta que voce autorizar.'
+            $a = Read-Answer 'Pasta onde ficam (ou ficarao) os repositorios da ufba.app'
+            if (-not $a.Trim()) { Fail 'preciso de uma pasta para o perfil.' }
+            $full = [IO.Path]::GetFullPath($a.Trim())
+            if (-not (Test-Path -LiteralPath $full -PathType Container)) { Fail "a pasta nao existe: $full" }
+            $roots += $full
+        }
+        if ($roots.Count -eq 0 -and $already) { Say 'Perfil "ufba" ja existe: mantenho as pastas (roots) que ele ja tem.' }
+        $others = @($existingProfiles | Where-Object { $_ -ne 'ufba' })
+        if ($others.Count -gt 0 -and $roots.Count -eq 0 -and -not $already) { Fail 'ha mais de um perfil: -Root e obrigatorio.' }
+    } elseif ($Root.Count -gt 0) { Warn '-Root so vale no modo perfil; ignorado.' }
+
+    $name = if ($ComputerName) { $ComputerName } elseif ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { 'computador' }
+
+    # ---- plano ----
+    Say ''
+    Say 'Plano (o que vai mudar nesta maquina):'
+    if ($mode -eq 'fresh') {
+        Say "  - instalar o ai-memory $aimVersion em $binDir (sha256 conferido contra o manifesto) e coloca-lo no PATH do usuario"
+        Say "  - pasta de dados do ai-memory: $dataDir"
+        Say ('  - gravar os hooks do ai-memory (servidor padrao = ufba.app, captura so em repositorios com marcador) em: ' + (($targets | ForEach-Object { $_.Label }) -join ', '))
+    } else {
+        Say ("  - registrar o perfil de servidor 'ufba' no ai-memory existente (dados em $dataDir)" + $(if ($roots.Count) { ", roots: " + ($roots -join ', ') } else { '' }))
+        Say '  - NAO mexer nos hooks, no servidor padrao nem no modo de captura'
+    }
+    Say ('  - registrar o MCP "ufba" (' + $mcpUrl + ') em: ' + (($targets | ForEach-Object { $_.Label }) -join ', '))
+    Say "  - guardar o id deste computador em $stateFile (sem segredo)"
+    Say '  - login de dispositivo: voce aprova na ufba.app; a chave deste computador fica so no ai-memory'
+    if ($dry) { Say ''; Say 'Simulacao (-DryRun) concluida: nada foi alterado.'; return 0 }
+
+    # ---- 2. binario (fresh) ----
+    $installedBinary = $false
+    if ($mode -eq 'fresh') {
+        $needInstall = $true
+        if (Test-Path -LiteralPath $binExe) {
+            $vr = Invoke-Native $binExe @('--version')
+            if ($vr.Code -eq 0 -and $vr.Out -match [regex]::Escape($aimVersion)) { $needInstall = $false; Say "ai-memory $aimVersion ja instalado."; if ($state -and $state.ai_memory_installed_by_ufba) { $installedBinary = $true } }
+        }
+        if ($needInstall) {
+            Say "Baixando o ai-memory $aimVersion ..."
+            $work = Join-Path ([IO.Path]::GetTempPath()) ('ufba-memory-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $work | Out-Null
+            try {
+                $zip = Join-Path $work 'ai-memory.zip'
+                Invoke-WebRequest -UseBasicParsing -Uri ([string]$art.url) -OutFile $zip -TimeoutSec 300
+                $got = Get-FileSha256 $zip
+                if ($got -ne ([string]$art.sha256).ToLowerInvariant()) { Fail "o SHA-256 do ai-memory baixado ($got) nao confere com o manifesto. Nada foi instalado." }
+                Add-Type -AssemblyName System.IO.Compression.FileSystem
+                $za = [IO.Compression.ZipFile]::OpenRead($zip)
+                try {
+                    foreach ($e in $za.Entries) {
+                        $n = $e.FullName
+                        if ($n.StartsWith('/') -or $n.StartsWith('\') -or $n -match '^[A-Za-z]:' -or ($n -split '[\\/]') -contains '..') { Fail "o arquivo do ai-memory tem um caminho suspeito ($n). Nada foi instalado." }
+                    }
+                } finally { $za.Dispose() }
+                $staged = Join-Path $work 'staged'
+                Expand-Archive -LiteralPath $zip -DestinationPath $staged
+                if (-not (Test-Path -LiteralPath (Join-Path $staged 'ai-memory.exe'))) { Fail 'o arquivo do ai-memory nao tem ai-memory.exe.' }
+                $parent = Split-Path $binDir -Parent
+                if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+                $old = $null
+                if (Test-Path -LiteralPath $binDir) { $old = "$binDir.old-" + [guid]::NewGuid().ToString('N').Substring(0, 8); Move-Item -LiteralPath $binDir -Destination $old }
+                try { Move-Item -LiteralPath $staged -Destination $binDir } catch { if ($old) { Move-Item -LiteralPath $old -Destination $binDir }; throw }
+                if ($old) { Remove-Item -LiteralPath $old -Recurse -Force -ErrorAction SilentlyContinue }
+                $installedBinary = $true
+            } finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+            Edit-UserPath $binDir $true
+            Say "ai-memory instalado em $binDir (reabra o terminal para ele aparecer no PATH)."
+        }
+        $aim = $binExe
+        $vr = Invoke-Native $aim @('--version')
+        if ($vr.Code -ne 0) { Fail 'o ai-memory instalado nao executa nesta maquina.' }
+    }
+
+    # ---- 3. login de dispositivo ----
+    Say ''
+    $r = Send-Http POST "$api/oauth/device_authorization" @{} @{ client_id = 'ufba-installer'; scope = 'memory:connect'; computer_name = $name; os = $osName } 'application/x-www-form-urlencoded'
+    if ($r.Status -ne 200) { Fail "nao consegui iniciar o login de dispositivo: $(Get-ApiMessage $r)" }
+    $dev = ConvertFrom-JsonSafe $r.Body
+    if (-not $dev -or -not $dev.device_code -or -not $dev.user_code) { Fail 'resposta inesperada no login de dispositivo.' }
+    Say 'Para autorizar este computador:'
+    Say "  1. abra  $($dev.verification_uri)"
+    Say "  2. confira que o codigo na tela e  $($dev.user_code)  (so aprove se ele apareceu AQUI agora)"
+    $complete = [string]$dev.verification_uri_complete
+    if ($env:UFBA_NO_BROWSER -ne '1' -and -not $testMode -and $complete -match '^https://([^/]+\.)?ufba\.app(/|$)') { try { Start-Process $complete } catch { } }
+    $interval = [double]$dev.interval; if ($interval -lt 1) { $interval = 5 }
+    $deadline = (Get-Date).AddSeconds([double]$dev.expires_in)
+    $short = $null
+    Say 'Aguardando a sua aprovacao ...'
+    while ((Get-Date) -lt $deadline) {
+        Wait-Seconds $interval
+        $pr = Send-Http POST "$api/token" @{} @{ grant_type = 'urn:ietf:params:oauth:grant-type:device_code'; device_code = [string]$dev.device_code; client_id = 'ufba-installer' } 'application/x-www-form-urlencoded'
+        if ($pr.Status -eq 200) { $tj = ConvertFrom-JsonSafe $pr.Body; if ($tj -and $tj.access_token) { $short = [string]$tj.access_token; break } ; Fail 'resposta inesperada do token.' }
+        if ($pr.Status -eq 0) { continue }
+        $pj = ConvertFrom-JsonSafe $pr.Body
+        $code = if ($pj) { [string]$pj.error } else { '' }
+        switch ($code) {
+            'authorization_pending' { continue }
+            'slow_down' { $interval += 5; continue }
+            'access_denied' { Write-Host ''; Write-Host 'A autorizacao foi negada na ufba.app. Nada foi instalado alem do programa (se era o modo fresh).'; return 4 }
+            'expired_token' { Write-Host ''; Write-Host 'O codigo expirou. Rode o instalador de novo para ver um novo.'; return 4 }
+            default { Fail "login de dispositivo falhou: $(Get-ApiMessage $pr)" }
+        }
+    }
+    if (-not $short) { Write-Host ''; Write-Host 'O tempo para aprovar acabou. Rode o instalador de novo.'; return 4 }
+    Say 'Autorizado.'
+
+    # ---- POST /memory/computers (idempotente por computer_id) ----
+    $computerId = if ($state -and $state.computer_id) { [string]$state.computer_id } else { $null }
+    $agentNames = @('claude-code')
+    $payload = @{ name = $name; os = $osName; agents = $agentNames; client_version = "ai-memory $aimVersion"; install_mode = $mode }
+    if ($computerId) { $payload.computer_id = $computerId }
+    $body = ConvertTo-Json -InputObject $payload -Depth 4
+    $key = $null; $created = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $cr = Send-Http POST "$api/memory/computers" @{ Authorization = "Bearer $short" } ([Text.Encoding]::UTF8.GetBytes($body)) 'application/json'
+        if ($cr.Status -eq 200) {
+            $created = ConvertFrom-JsonSafe $cr.Body
+            if ($created -and $created.key -and $created.computer_id) { break }
+            $created = $null
+        } elseif ($cr.Status -ne 0 -and $cr.Status -lt 500) { Fail "a ufba.app recusou o pedido: $(Get-ApiMessage $cr)" }
+        if ($attempt -lt 3) { Warn 'a resposta se perdeu ou o servidor falhou; tentando de novo (com o mesmo id do computador, a chave e trocada com seguranca).'; Wait-Seconds (2 * $attempt) }
+    }
+    if (-not $created) { Fail 'nao consegui registrar o computador. Rode o instalador de novo em alguns minutos.' }
+    $key = [string]$created.key
+    $created.key = $null
+    $computerId = [string]$created.computer_id
+    $username = [string]$created.username
+    if (([string]$created.memory_url).TrimEnd('/') -ne $mem) { Fail 'o endereco do servidor de memoria devolvido pela API nao e o esperado. Nada foi gravado.' }
+
+    $stateObj = [ordered]@{
+        schema = 1; computer_id = $computerId; name = $name; os = $osName; install_mode = $mode
+        installer_version = $InstallerVersion; ai_memory_version = $aimVersion; ai_memory_exe = $aim
+        ai_memory_dir = $(if ($mode -eq 'fresh') { $binDir } else { $null }); ai_memory_installed_by_ufba = $installedBinary
+        data_dir = $dataDir; roots = @($roots); profile = $(if ($mode -eq 'profile') { 'ufba' } else { $null })
+        targets = @(); mcp_url = $mcpUrl; updated_at = (Get-Date).ToUniversalTime().ToString('o')
+    }
+    Write-State $stateObj
+
+    # ---- 5. gravar a chave ----
+    $written = @()
+    try {
+        foreach ($t in $targets) {
+            if ($mode -eq 'fresh') {
+                $args2 = @('--data-dir', $dataDir, 'install-hooks', '--agent', 'claude-code', '--server-url', $mem, '--capture-mode', 'allowlist', '--as-user', $username, '--apply')
+                $res = Invoke-Native $aim $args2 $null (Get-TargetEnv $t @{ AI_MEMORY_AUTH_TOKEN = $key }) $key
+                if ($res.Code -ne 0) { Fail "install-hooks falhou em $($t.Label): $($res.Out.Trim())" }
+            }
+            $written += $t
+        }
+        if ($mode -eq 'profile') {
+            $args2 = @('--data-dir', $dataDir, 'server', 'add', 'ufba', '--url', $mem)
+            foreach ($rt in $roots) { $args2 += @('--root', $rt) }
+            $args2 += '--auth-token-stdin'
+            $res = Invoke-Native $aim $args2 $key @{} $key
+            if ($res.Code -ne 0) { Fail "server add falhou: $($res.Out.Trim())" }
+        }
+    } catch {
+        Write-Host ''
+        Write-Host 'Nao consegui gravar a chave; por seguranca NAO confirmei o computador. Em ate 10 minutos a ufba.app revoga a chave sozinha.'
+        Write-Host 'Corrija o problema e rode o instalador de novo (ele reaproveita o id deste computador).'
+        throw
+    } finally { $key = $null; $short2 = $null }
+    Say 'Chave gravada no ai-memory (nao aparece em nenhum log).'
+
+    # ---- confirmar (consome o token curto) ----
+    $confirmed = $false
+    for ($i = 1; $i -le 3 -and -not $confirmed; $i++) {
+        $cf = Send-Http POST "$api/memory/computers/$computerId/confirm" @{ Authorization = "Bearer $short" }
+        if ($cf.Status -eq 204 -or $cf.Status -eq 200) { $confirmed = $true } elseif ($cf.Status -ne 0 -and $cf.Status -lt 500) { Fail "a ufba.app nao confirmou o computador: $(Get-ApiMessage $cf)" } else { Wait-Seconds (2 * $i) }
+    }
+    if (-not $confirmed) { Fail 'a chave foi gravada, mas nao consegui confirmar com a ufba.app. Rode o instalador de novo (em ate 10 minutos a chave nao confirmada e revogada).' }
+    $short = $null
+
+    # ---- 7. MCP ----
+    $claudeCmd = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $mcpOk = @(); $targetRecs = @()
+    foreach ($t in $targets) {
+        $targetRecs += [ordered]@{ label = $t.Label; kind = $t.Kind; config_dir = $t.Dir; env_dir = $t.EnvDir }
+        if (-not $claudeCmd) { Warn "comando claude nao encontrado; em $($t.Label) rode: claude mcp add --transport http --scope user ufba $mcpUrl"; continue }
+        $envm = Get-TargetEnv $t
+        $g = Invoke-Native $claudeCmd.Source @('mcp', 'get', 'ufba') $null $envm
+        if ($g.Code -eq 0) { Say "MCP ufba ja registrado: $($t.Label)"; $mcpOk += $t.Label; continue }
+        $ad = Invoke-Native $claudeCmd.Source @('mcp', 'add', '--transport', 'http', '--scope', 'user', 'ufba', $mcpUrl) $null $envm
+        if ($ad.Code -eq 0) { Say "MCP ufba registrado: $($t.Label)"; $mcpOk += $t.Label } else { Warn "nao consegui registrar o MCP em $($t.Label): $($ad.Out.Trim())" }
+    }
+    $stateObj.targets = @($targetRecs)
+    $stateObj.updated_at = (Get-Date).ToUniversalTime().ToString('o')
+    Write-State $stateObj
+
+    # ---- 9. auto-teste (so leitura; a chave ja nao esta mais em memoria, entao usa o que o ai-memory guardou) ----
+    Say ''
+    Say 'Verificando:'
+    if ($mode -eq 'profile') {
+        $sl = Invoke-Native $aim @('--data-dir', $dataDir, 'server', 'list', '--json')
+        if ($sl.Code -eq 0 -and $sl.Out -match '"name"\s*:\s*"ufba"') { Say '  ok: o perfil "ufba" esta registrado.' } else { Warn 'o perfil "ufba" nao apareceu em "ai-memory server list".' }
+        $selfRoot = if ($roots.Count) { $roots[0] } else { $null }
+        if ($selfRoot) {
+            $probe = Join-Path $selfRoot ('.ufba-selftest-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+            try {
+                New-Item -ItemType Directory -Path $probe | Out-Null
+                [IO.File]::WriteAllText((Join-Path $probe '.ai-memory.toml'), "workspace = `"ufba-app`"`nproject = `"selftest`"`nserver = `"ufba`"`n")
+                Push-Location -LiteralPath $probe
+                try { $cc = Invoke-Native $aim @('--data-dir', $dataDir, 'hook', '--event', 'user-prompt-submit', '--agent', 'claude-code', '--check-capture') '{}' } finally { Pop-Location }
+                if ($cc.Out -match '"server_resolution"\s*:\s*"marker"') { Say '  ok: um repositorio com marcador server = "ufba" dentro da pasta autorizada captura para a ufba.app.' }
+                else { Warn 'o teste de captura nao devolveu server_resolution = marker (confira a pasta autorizada e rode: ai-memory hook --check-capture).' }
+            } finally { Remove-Item -LiteralPath $probe -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    } else {
+        Say '  ok: hooks gravados (servidor padrao = ufba.app, captura so em repositorios com marcador).'
+    }
+    $idr = $null
+    $keyFile = if ($mode -eq 'fresh') { Join-Path $dataDir 'auth-token' } else { Join-Path (Join-Path $dataDir 'auth-tokens') 'ufba' }
+    if (Test-Path -LiteralPath $keyFile) {
+        $k2 = (Get-Content -LiteralPath $keyFile -TotalCount 1)
+        if ($k2) { $idr = Send-Http GET "$mem/identity" @{ Authorization = "Bearer $($k2.Trim())" }; $k2 = $null }
+    }
+    if ($idr -and $idr.Status -eq 200 -and $idr.Body -match [regex]::Escape($username)) { Say "  ok: o servidor de memoria reconhece este computador como a sua conta (user:$username)." }
+    else { Warn 'nao consegui confirmar a identidade no servidor de memoria (/identity). Se algo falhar depois, rode o instalador de novo.' }
+
+    # ---- 10. resumo ----
+    Say ''
+    Say '================ Resumo ================'
+    Say "Modo: $mode    Computador: $name    Id: $computerId"
+    if ($mode -eq 'fresh') { Say ("- ai-memory $aimVersion em $binDir; hooks gravados em: " + (($targets | ForEach-Object { $_.Label }) -join ', ')) }
+    else { Say ('- perfil "ufba" registrado' + $(if ($roots.Count) { ' (roots: ' + ($roots -join ', ') + ')' } else { '' }) + '; seus hooks e servidor padrao ficaram como estavam') }
+    Say ('- MCP "ufba" registrado em: ' + $(if ($mcpOk.Count) { $mcpOk -join ', ' } else { '(nenhuma conta)' }))
+    Say "- id do computador (sem segredo): $stateFile"
+    if ($mode -eq 'profile') {
+        Say ''
+        Say 'Para um repositorio capturar para a ufba.app, ponha na raiz dele (dentro da pasta autorizada) um .ai-memory.toml com:'
+        Say '  workspace = "ufba-app"'
+        Say '  project   = "<projeto>"'
+        Say '  server    = "ufba"'
+    }
+    Say ''
+    Say 'Para desfazer: rode este instalador com -Uninstall, e remova este computador em "Computadores conectados" na ufba.app (isso revoga a chave).'
+    Say 'No Claude Code, rode /mcp e autentique o servidor "ufba" (login com Google @ufba.br).'
+    return 0
+}
+
+$ufbaExit = Invoke-UfbaMemory
+if ($ufbaExit -is [array]) { $ufbaExit = $ufbaExit[-1] }
+# Como arquivo (-File) o codigo de saida vale; em memoria (bootstrap/iex) so seta $LASTEXITCODE, para nao fechar o terminal.
+if ($ufbaExit -ne 0) { if ($PSCommandPath) { exit $ufbaExit } else { $global:LASTEXITCODE = $ufbaExit } }
+) { $selfHash = $env:UFBA_INSTALLER_SHA256 }
+    else { Fail 'nao consegui conferir o hash deste instalador; use o bootstrap (irm https://ufba.app/install.ps1 | iex) ou baixe o arquivo e rode como arquivo.' }
     $expectSelf = [string]$manifest.installer.files.'install.ps1'
-    if ((Get-FileSha256 $self) -ne $expectSelf.ToLowerInvariant()) {
+    if ($selfHash -ne $expectSelf.ToLowerInvariant()) {
         Fail 'o hash deste instalador nao confere com o manifesto da ufba.app. Nada foi instalado. Baixe de novo o instalador oficial.'
     }
     $aimVersion = [string]$manifest.aiMemory.version
