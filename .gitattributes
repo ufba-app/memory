@@ -1,4 +1,5 @@
 # Os hashes do manifesto sao de bytes: o checkout nunca pode trocar os fins de linha.
+* text=auto eol=lf
 *.sh   text eol=lf
 *.ps1  text eol=lf
 *.mjs  text eol=lf
