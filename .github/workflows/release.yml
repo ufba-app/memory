@@ -1,0 +1,72 @@
+# Release do instalador: gera o manifesto e os bootstraps a partir dos MESMOS arquivos (tools/build-release.mjs), baixa os
+# artefatos do ai-memory da tag do VERSION (calcula o sha256 dos bytes baixados) e anexa tudo ao release do GitHub.
+# O release e imutavel: a tag `installer-vX.Y.Z` tem que bater com a versao dentro dos instaladores, e o workflow nao
+# sobrescreve release existente. ufba.app/install.ps1|sh servem os bootstraps deste release; a API serve o manifesto.
+#   git tag installer-v1.0.0 && git push origin installer-v1.0.0
+# Em workflow_dispatch sem `tag` so gera os arquivos e os guarda como artefato do workflow (nada e publicado).
+name: release
+
+on:
+  push:
+    tags: ['installer-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag installer-vX.Y.Z JA existente para publicar (vazio = so gerar e guardar como artefato)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Tag
+        id: t
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          tag="$INPUT_TAG"
+          if [ -z "$tag" ] && [ "$REF_TYPE" = tag ]; then tag="$REF_NAME"; fi
+          # So aceita o formato esperado (a tag entra depois em comandos de shell).
+          if [ -n "$tag" ] && ! printf '%s' "$tag" | grep -Eq '^installer-v[0-9]+[.][0-9]+[.][0-9]+$'; then echo "tag invalida: $tag" >&2; exit 1; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.t.outputs.tag || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Testes do release (sem rede)
+        run: node --test test/release.test.mjs test/entrypoint.test.mjs
+
+      - name: Gerar manifesto e bootstraps
+        run: |
+          if [ -n "${{ steps.t.outputs.tag }}" ]; then tagarg="--tag ${{ steps.t.outputs.tag }}"; else tagarg=""; fi
+          node tools/build-release.mjs --out dist --download $tagarg
+          cat dist/manifest.json
+          (cd dist && sha256sum -c SHA256SUMS)
+
+      - name: Guardar como artefato do workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-release
+          path: dist/*
+
+      - name: Publicar o release (imutavel)
+        if: steps.t.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.t.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then echo "o release $tag ja existe e nao e sobrescrito" >&2; exit 1; fi
+          gh release create "$tag" dist/* --verify-tag --title "Instalador da memória ${tag#installer-v}" \
+            --notes "Instalador da memória compartilhada do ufba.app. Para conferir antes de rodar, veja o README (SHA256SUMS)."

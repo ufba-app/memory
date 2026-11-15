@@ -1,0 +1,10 @@
+{
+  "name": "ufba-memory-installer",
+  "private": true,
+  "description": "Instalador da memoria compartilhada do ufba.app (testes e ferramentas de release, sem dependencias).",
+  "license": "AGPL-3.0-only",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  }
+}
