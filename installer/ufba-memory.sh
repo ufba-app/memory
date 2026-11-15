@@ -22,7 +22,7 @@
 # Tudo roda dentro de main(), chamada na ultima linha: um download truncado nao executa nada.
 
 main() {
-    IV='1.0.0'
+    IV='1.0.1'
     PINNED_API='https://api.ufba.app'
     PINNED_MEMORY='https://memory.ufba.app'
     umask 077

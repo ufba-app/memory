@@ -31,7 +31,7 @@ param(
 function Invoke-UfbaMemory {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
-    $InstallerVersion = '1.0.0'
+    $InstallerVersion = '1.0.1'
     $PinnedApi = 'https://api.ufba.app'
     $PinnedMemory = 'https://memory.ufba.app'
     $dry = [bool]($DryRun -or $WhatIf)
