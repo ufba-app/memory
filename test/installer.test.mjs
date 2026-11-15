@@ -124,6 +124,59 @@ for (const adapter of Object.values(adapters)) {
       assert.equal(fakes.state.events.filter((e) => e.what === 'device_authorization').length, 0);
     });
 
+    // Hooks por repositorio (install-hooks --scope project feito pela pessoa): o instalador so RECONHECE, nunca escreve neles.
+    const seedRepo = (dir, { marker = true, hooks = true } = {}) => {
+      fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+      if (hooks) {
+        fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+        fs.writeFileSync(path.join(dir, '.claude', 'settings.local.json'), JSON.stringify({ hooks: { SessionStart: [{ command: 'ai-memory hook --event session-start --agent claude-code' }] } }));
+      }
+      if (marker) fs.writeFileSync(path.join(dir, '.ai-memory.toml'), 'workspace = "ufba-app"\nproject = "api"\nserver = "ufba"\n');
+    };
+
+    scenario('profile sem hooks globais, com hooks no repo dentro do --root: reconhece, registra o perfil e confere a captura sem escrever no repo', {}, async (w, fakes) => {
+      w.stubs('claude', 'ai-memory'); fs.mkdirSync(w.claudeDir, { recursive: true });
+      const repo = path.join(w.repos, 'api'); seedRepo(repo);
+      const other = path.join(w.repos, 'ws', 'web'); seedRepo(other, { marker: false });
+      const tooDeep = path.join(w.repos, 'a', 'b', 'c'); seedRepo(tooDeep);
+      const snapRepo = snapshot(repo); const snapOther = snapshot(other);
+      const r = await w.run(fakes, { yes: true, roots: [w.repos] });
+      assert.equal(r.code, 0, r.all);
+      assert.match(r.out, /Repositorios com hooks do ai-memory/);
+      assert.ok(r.out.includes('api'), r.out); assert.ok(r.out.includes('web'));
+      assert.ok(!r.out.includes(path.join('a', 'b', 'c')), 'terceiro nivel nao e varrido');
+      assert.doesNotMatch(r.out, /SEM hooks/);
+      assert.equal(call(w, 'ai-memory', (c) => c.args.includes('install-hooks')).length, 0, 'nunca install-hooks');
+      assert.equal(call(w, 'ai-memory', (c) => c.args.includes('server') && c.args.includes('add')).length, 1, 'perfil registrado');
+      assert.equal(call(w, 'claude', (c) => c.args[1] === 'add').length, 1);
+      assert.match(r.out, /capturam para a ufba\.app/);
+      assert.match(r.out, /NAO capturam/); // repo com hooks e sem marcador
+      assert.deepEqual(snapshot(repo), snapRepo, 'repo intacto (nada no .git nem em .claude)');
+      assert.deepEqual(snapshot(other), snapOther);
+      assert.equal(fs.existsSync(path.join(repo, '.git', 'info', 'exclude')), false, 'nao toca no .git/info/exclude');
+      assert.equal(fs.existsSync(path.join(w.claudeDir, 'settings.json')), false, 'nao toca no global');
+      assert.equal(w.state().install_mode, 'profile');
+    });
+
+    scenario('profile: reconhece o repo onde o instalador e rodado (fora do --root) e avisa que ele nao captura', {}, async (w, fakes) => {
+      w.stubs('claude', 'ai-memory'); fs.mkdirSync(w.claudeDir, { recursive: true });
+      seedRepo(w.work); // o instalador roda com cwd = w.work
+      const r = await w.run(fakes, { yes: true, roots: [w.repos] });
+      assert.equal(r.code, 0, r.all);
+      assert.match(r.out, /Repositorios com hooks do ai-memory/);
+      assert.match(r.out, /NAO capturam/);
+      assert.equal(call(w, 'ai-memory', (c) => c.args.includes('install-hooks')).length, 0);
+    });
+
+    scenario('profile sem hooks em lugar nenhum: a mensagem recomenda install-hooks por repo e rodar de novo', {}, async (w, fakes) => {
+      w.stubs('claude', 'ai-memory'); fs.mkdirSync(w.claudeDir, { recursive: true });
+      seedRepo(path.join(w.repos, 'api'), { hooks: false });
+      const r = await w.run(fakes, { yes: true, roots: [w.repos] });
+      assert.equal(r.code, 3, r.all);
+      assert.match(r.out, /--scope project/); assert.match(r.out, /rode este instalador de novo/);
+      assert.equal(fakes.state.events.filter((e) => e.what === 'device_authorization').length, 0);
+    });
+
     scenario('profile: --root e obrigatorio em --yes (com outro perfil ja registrado)', {}, async (w, fakes) => {
       w.stubs('claude', 'ai-memory'); w.seedHooks(w.claudeDir); w.seedProfile('grimorio', [w.repos]);
       const r = await w.run(fakes, { yes: true });

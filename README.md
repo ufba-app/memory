@@ -70,7 +70,7 @@ No modo `profile` o instalador **para e explica, sem alterar nada**, quando:
   o instalador nunca atualiza o ai-memory de ninguém;
 - há sinais de ai-memory mas o programa não foi encontrado;
 - o agente não tem hooks do ai-memory. O instalador nunca roda `install-hooks` no modo `profile`; ele mostra as duas opções, e depois é só rodar o instalador de novo:
-  1. **(recomendada) só nos repos da ufba:** dentro de cada repo do ufba-app, `ai-memory install-hooks --agent claude-code --scope project --apply`. Os hooks valem só naquele repo.
+  1. **(recomendada) só nos repos da ufba:** dentro de cada repo do ufba-app, `ai-memory install-hooks --agent claude-code --scope project --apply`, e rode o instalador de novo (dentro desse repo ou com `--root` apontando para a pasta dos repos). Os hooks valem só naquele repo. O instalador **só reconhece** esses hooks (`.claude/settings.local.json` do repo onde ele roda e dos repos git até 2 níveis abaixo do `--root`, somente leitura), registra o perfil e lista quais repos já capturam para a ufba.app; ele não instala hooks, não mexe no `.git` nem no Claude Code global. Para capturar, o repo precisa do `.ai-memory.toml` com `server = "ufba"`.
   2. **Global, só com marcador:** `ai-memory install-hooks --agent claude-code --apply --capture-mode allowlist`. Atenção: o modo `allowlist` vale também para o seu servidor pessoal; repositórios sem `.ai-memory.toml` deixam de capturar.
 
 ### Instalação não é o seu servidor padrão

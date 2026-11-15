@@ -31,7 +31,7 @@ param(
 function Invoke-UfbaMemory {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
-    $InstallerVersion = '1.0.1'
+    $InstallerVersion = '1.0.2'
     $PinnedApi = 'https://api.ufba.app'
     $PinnedMemory = 'https://memory.ufba.app'
     $dry = [bool]($DryRun -or $WhatIf)
@@ -172,6 +172,34 @@ function Invoke-UfbaMemory {
         if (-not (Test-Path -LiteralPath $f)) { return $false }
         $t = Get-Content -LiteralPath $f -Raw
         return ($t -match 'ai-memory' -and $t -match '--event')
+    }
+    # Hooks por repositorio (install-hooks --scope project, feito pela pessoa): so LEITURA. O Claude Code nao herda
+    # .claude/settings* de pastas acima do repo, entao cada repo e olhado por si.
+    function Test-RepoHooks([string]$repo) {
+        $f = Join-Path (Join-Path $repo '.claude') 'settings.local.json'
+        if (-not (Test-Path -LiteralPath $f)) { return $false }
+        $t = Get-Content -LiteralPath $f -Raw
+        return ($t -match 'ai-memory' -and $t -match '--event')
+    }
+    # Repositorios git na propria pasta, nos filhos e nos netos (nao desce dentro de um repo; sem varrer o disco).
+    function Find-GitRepoIn([string]$dir, [int]$depth) {
+        if (Test-Path -LiteralPath (Join-Path $dir '.git')) { Write-Output $dir; return }
+        if ($depth -ge 2) { return }
+        foreach ($c in (Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue | Sort-Object Name)) {
+            if ($c.Name.StartsWith('.') -or $c.Name -eq 'node_modules') { continue }
+            Find-GitRepoIn $c.FullName ($depth + 1)
+        }
+    }
+    # Raiz do repo git que contem a pasta atual (onde o instalador foi rodado), ou $null.
+    function Get-CurrentRepo {
+        $d = (Get-Location).ProviderPath
+        for ($i = 0; $i -lt 12 -and $d; $i++) {
+            if (Test-Path -LiteralPath (Join-Path $d '.git')) { return $d }
+            $p = Split-Path $d -Parent
+            if (-not $p -or $p -eq $d) { break }
+            $d = $p
+        }
+        return $null
     }
     function Get-ClaudeTargets {
         $list = @()
@@ -326,31 +354,6 @@ function Invoke-UfbaMemory {
     $targets = @()
     Say ''
     if ($targetsAll.Count -eq 0) { return (Stop-Planned 'Nao encontrei nenhum agente compativel (Claude Code ou contas do Maestri). Instale o Claude Code e rode de novo.') }
-    Say 'Agentes encontrados:'
-    $skippedNoHooks = $false
-    foreach ($t in $targetsAll) {
-        $hooks = Test-AimHooks $t.Dir
-        if ($mode -eq 'profile' -and -not $hooks) {
-            Say "  - $($t.Label): SEM hooks do ai-memory; vou pular (veja as opcoes abaixo)."
-            $skippedNoHooks = $true
-            continue
-        }
-        if (Confirm-Item "  Conectar $($t.Label) ($($t.Dir))?") { $targets += $t } else { Say "  (pulado: $($t.Label))" }
-    }
-    if ($skippedNoHooks) {
-        Say ''
-        Say 'Para conectar um agente sem hooks, instale os hooks do ai-memory (este instalador nunca roda install-hooks no modo perfil) e rode este instalador de novo:'
-        Say "  1. (recomendada) so nos repos da ufba: dentro de cada repo do ufba-app rode 'ai-memory install-hooks --agent claude-code --scope project --apply'. Os hooks valem so naquele repo."
-        Say "  2. global, so com marcador: 'ai-memory install-hooks --agent claude-code --apply --capture-mode allowlist'. ATENCAO: o modo allowlist vale tambem para o seu servidor pessoal; repos sem .ai-memory.toml deixam de capturar."
-        Say "  (conta do Maestri na opcao 2: rode com a variavel CLAUDE_CONFIG_DIR apontando para a pasta da conta.)"
-    }
-    foreach ($o in @('.codex', '.gemini', '.cursor')) {
-        if (Test-Path -LiteralPath (Join-Path $userHome $o)) { Say "  - $o encontrado, mas nao conectado: esse agente usa scripts que nao roteiam perfil de servidor." }
-    }
-    if ($targets.Count -eq 0) {
-        if ($mode -eq 'profile') { return (Stop-Planned 'Nenhum agente com hooks do ai-memory foi selecionado. O modo perfil so conecta agentes que ja tem os hooks do ai-memory: instale-os por uma das opcoes acima e rode de novo.') }
-        return (Stop-Planned 'Nenhum agente selecionado.')
-    }
 
     # ---- roots (profile) ----
     $roots = @()
@@ -379,6 +382,48 @@ function Invoke-UfbaMemory {
         if ($others.Count -gt 0 -and $roots.Count -eq 0 -and -not $already) { Fail 'ha mais de um perfil: -Root e obrigatorio.' }
     } elseif ($Root.Count -gt 0) { Warn '-Root so vale no modo perfil; ignorado.' }
 
+    # ---- hooks por repositorio (profile; so leitura): repo onde o instalador roda + repos git dentro dos roots ----
+    $repoHooked = @()
+    if ($mode -eq 'profile') {
+        $cands = @()
+        $cur = Get-CurrentRepo
+        if ($cur) { $cands += $cur }
+        foreach ($rt in $roots) { $cands += @(Find-GitRepoIn $rt 0) }
+        $repoHooked = @($cands | Select-Object -Unique | Where-Object { Test-RepoHooks $_ })
+        if ($repoHooked.Count -gt 0) {
+            Say ''
+            Say 'Repositorios com hooks do ai-memory instalados por voce (escopo project; eu so leio, nao altero):'
+            foreach ($rh in $repoHooked) { Say "  - $rh" }
+        }
+    }
+
+    Say 'Agentes encontrados:'
+    $skippedNoHooks = $false
+    foreach ($t in $targetsAll) {
+        $hooks = Test-AimHooks $t.Dir
+        if ($mode -eq 'profile' -and -not $hooks -and $repoHooked.Count -eq 0) {
+            Say "  - $($t.Label): SEM hooks do ai-memory; vou pular (veja as opcoes abaixo)."
+            $skippedNoHooks = $true
+            continue
+        }
+        if ($mode -eq 'profile' -and -not $hooks) { Say "  - $($t.Label): sem hooks globais; vale o que voce instalou nos repositorios acima." }
+        if (Confirm-Item "  Conectar $($t.Label) ($($t.Dir))?") { $targets += $t } else { Say "  (pulado: $($t.Label))" }
+    }
+    if ($skippedNoHooks) {
+        Say ''
+        Say 'Para conectar um agente sem hooks, instale os hooks do ai-memory (este instalador nunca roda install-hooks no modo perfil) e rode este instalador de novo:'
+        Say "  1. (recomendada) so nos repos da ufba: dentro de cada repo do ufba-app rode 'ai-memory install-hooks --agent claude-code --scope project --apply' e rode este instalador de novo, dentro desse repo ou com -Root apontando para a pasta dos repos. O instalador reconhece os hooks do repo (precisa do .ai-memory.toml com server = `"ufba`" para capturar para a ufba.app)."
+        Say "  2. global, so com marcador: 'ai-memory install-hooks --agent claude-code --apply --capture-mode allowlist'. ATENCAO: o modo allowlist vale tambem para o seu servidor pessoal; repos sem .ai-memory.toml deixam de capturar."
+        Say "  (conta do Maestri na opcao 2: rode com a variavel CLAUDE_CONFIG_DIR apontando para a pasta da conta.)"
+    }
+    foreach ($o in @('.codex', '.gemini', '.cursor')) {
+        if (Test-Path -LiteralPath (Join-Path $userHome $o)) { Say "  - $o encontrado, mas nao conectado: esse agente usa scripts que nao roteiam perfil de servidor." }
+    }
+    if ($targets.Count -eq 0) {
+        if ($mode -eq 'profile') { return (Stop-Planned 'Nenhum agente com hooks do ai-memory foi selecionado. O modo perfil so conecta agentes que ja tem os hooks do ai-memory: instale-os por uma das opcoes acima e rode de novo.') }
+        return (Stop-Planned 'Nenhum agente selecionado.')
+    }
+
     $name = if ($ComputerName) { $ComputerName } elseif ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { 'computador' }
 
     # ---- plano ----
@@ -391,6 +436,7 @@ function Invoke-UfbaMemory {
     } else {
         Say ("  - registrar o perfil de servidor 'ufba' no ai-memory existente (dados em $dataDir)" + $(if ($roots.Count) { ", roots: " + ($roots -join ', ') } else { '' }))
         Say '  - NAO mexer nos hooks, no servidor padrao nem no modo de captura'
+        if ($repoHooked.Count -gt 0) { Say ('  - reconhecer os hooks que voce instalou em ' + $repoHooked.Count + ' repositorio(s) (so leitura; sem install-hooks, sem tocar no .git)') }
     }
     Say ('  - registrar o MCP "ufba" (' + $mcpUrl + ') em: ' + (($targets | ForEach-Object { $_.Label }) -join ', '))
     Say "  - guardar o id deste computador em $stateFile (sem segredo)"
@@ -575,6 +621,20 @@ function Invoke-UfbaMemory {
                 else { Warn 'o teste de captura nao devolveu server_resolution = marker (confira a pasta autorizada e rode: ai-memory hook --check-capture).' }
             } finally { Remove-Item -LiteralPath $probe -Recurse -Force -ErrorAction SilentlyContinue }
         }
+        # repos com hooks (escopo project): captura de verdade de cada um, so leitura
+        $repoOk = @(); $repoNo = @()
+        foreach ($rh in $repoHooked) {
+            Push-Location -LiteralPath $rh
+            try { $rc = Invoke-Native $aim @('--data-dir', $dataDir, 'hook', '--event', 'user-prompt-submit', '--agent', 'claude-code', '--check-capture') '{}' } finally { Pop-Location }
+            if ($rc.Out -match '"server_resolution"\s*:\s*"marker"') { $repoOk += $rh }
+            else { $repoNo += ("$rh (" + $(if ($rc.Out -match '"server_resolution"\s*:\s*"([^"]+)"') { $Matches[1] } else { 'sem resposta' }) + ')') }
+        }
+        if ($repoOk.Count -gt 0) { Say '  ok: capturam para a ufba.app (hooks do repo + marcador server = "ufba" dentro da pasta autorizada):'; foreach ($x in $repoOk) { Say "      - $x" } }
+        if ($repoNo.Count -gt 0) {
+            Warn 'estes repositorios tem hooks, mas NAO capturam para a ufba.app ainda:'
+            foreach ($x in $repoNo) { Say "      - $x" }
+            Say '      Confira se o repo tem .ai-memory.toml com server = "ufba" e se esta dentro da pasta autorizada (-Root).'
+        }
     } else {
         Say '  ok: hooks gravados (servidor padrao = ufba.app, captura so em repositorios com marcador).'
     }
@@ -593,6 +653,7 @@ function Invoke-UfbaMemory {
     Say "Modo: $mode    Computador: $name    Id: $computerId"
     if ($mode -eq 'fresh') { Say ("- ai-memory $aimVersion em $binDir; hooks gravados em: " + (($targets | ForEach-Object { $_.Label }) -join ', ')) }
     else { Say ('- perfil "ufba" registrado' + $(if ($roots.Count) { ' (roots: ' + ($roots -join ', ') + ')' } else { '' }) + '; seus hooks e servidor padrao ficaram como estavam') }
+    if ($mode -eq 'profile' -and $repoHooked.Count -gt 0) { Say ('- repositorios com hooks reconhecidos (so leitura): ' + $repoHooked.Count + '; capturam para a ufba.app: ' + $repoOk.Count) }
     Say ('- MCP "ufba" registrado em: ' + $(if ($mcpOk.Count) { $mcpOk -join ', ' } else { '(nenhuma conta)' }))
     Say "- id do computador (sem segredo): $stateFile"
     if ($mode -eq 'profile') {

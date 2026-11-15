@@ -22,7 +22,7 @@
 # Tudo roda dentro de main(), chamada na ultima linha: um download truncado nao executa nada.
 
 main() {
-    IV='1.0.1'
+    IV='1.0.2'
     PINNED_API='https://api.ufba.app'
     PINNED_MEMORY='https://memory.ufba.app'
     umask 077
@@ -185,6 +185,33 @@ ${1#--root=}" ;;
     has_hooks() {
         [ -f "$1/settings.json" ] && grep -q 'ai-memory' "$1/settings.json" && grep -q -e '--event' "$1/settings.json"
     }
+    # Hooks por repositorio (install-hooks --scope project, feito pela pessoa): so LEITURA. O Claude Code nao herda
+    # .claude/settings* de pastas acima do repo, entao cada repo e olhado por si.
+    repo_has_hooks() {
+        [ -f "$1/.claude/settings.local.json" ] && grep -q 'ai-memory' "$1/.claude/settings.local.json" && grep -q -e '--event' "$1/.claude/settings.local.json"
+    }
+    # Repositorios git na propria pasta, nos filhos e nos netos (nao desce dentro de um repo; sem varrer o disco).
+    find_repos() (  # dir profundidade
+        _fd=$1; _dp=$2
+        if [ -e "$_fd/.git" ]; then printf '%s\n' "$_fd"; exit 0; fi
+        [ "$_dp" -ge 2 ] && exit 0
+        for _c in "$_fd"/*/; do
+            [ -d "$_c" ] || continue
+            _c=${_c%/}
+            case "${_c##*/}" in .*|node_modules) continue ;; esac
+            find_repos "$_c" $((_dp + 1))
+        done
+    )
+    # Raiz do repo git que contem a pasta atual (onde o instalador foi rodado), ou nada.
+    cur_repo() {
+        _cd=$(pwd); _ci=0
+        while [ $_ci -lt 12 ] && [ -n "$_cd" ]; do
+            if [ -e "$_cd/.git" ]; then printf '%s\n' "$_cd"; return 0; fi
+            [ "$_cd" = / ] && break
+            _cd=$(dirname "$_cd"); _ci=$((_ci + 1))
+        done
+        return 0
+    }
     collect_targets() {  # saida: linhas "label|dir|envdir"
         _def=${CLAUDE_CONFIG_DIR:-}; _defenv=$_def
         [ -n "$_def" ] || _def="$HOME_DIR/.claude"
@@ -330,34 +357,6 @@ Programa encontrado: $AIM"
     # ---- 4. agentes ----
     say ''
     [ -n "$TARGETS" ] || stop_planned 'Nao encontrei nenhum agente compativel (Claude Code ou contas do Maestri). Instale o Claude Code e rode de novo.'
-    say 'Agentes encontrados:'
-    CHOSEN=''
-    while IFS='|' read -r _l _d _e; do
-        if [ "$MODE" = profile ] && ! has_hooks "$_d"; then
-            say "  - $_l: SEM hooks do ai-memory; vou pular (veja as opcoes abaixo)."
-            SKIPPED_NO_HOOKS=1
-            continue
-        fi
-        if confirm_item "  Conectar $_l ($_d)?"; then CHOSEN="${CHOSEN:+$CHOSEN
-}$_l|$_d|$_e"; else say "  (pulado: $_l)"; fi
-    done <<EOF
-$TARGETS
-EOF
-    if [ -n "${SKIPPED_NO_HOOKS:-}" ]; then
-        say ''
-        say 'Para conectar um agente sem hooks, instale os hooks do ai-memory (este instalador nunca roda install-hooks no modo perfil) e rode este instalador de novo:'
-        say "  1. (recomendada) so nos repos da ufba: dentro de cada repo do ufba-app rode 'ai-memory install-hooks --agent claude-code --scope project --apply'. Os hooks valem so naquele repo."
-        say "  2. global, so com marcador: 'ai-memory install-hooks --agent claude-code --apply --capture-mode allowlist'. ATENCAO: o modo allowlist vale tambem para o seu servidor pessoal; repos sem .ai-memory.toml deixam de capturar."
-        say "  (conta do Maestri na opcao 2: rode com a variavel CLAUDE_CONFIG_DIR apontando para a pasta da conta.)"
-    fi
-    for _o in .codex .gemini .cursor; do
-        [ -d "$HOME_DIR/$_o" ] && say "  - $_o encontrado, mas nao conectado: esse agente usa scripts que nao roteiam perfil de servidor."
-    done
-    if [ -z "$CHOSEN" ]; then
-        [ "$MODE" = profile ] && stop_planned 'Nenhum agente com hooks do ai-memory foi selecionado. O modo perfil so conecta agentes que ja tem os hooks do ai-memory: instale-os por uma das opcoes acima e rode de novo.'
-        stop_planned 'Nenhum agente selecionado.'
-    fi
-    LABELS=$(printf '%s\n' "$CHOSEN" | awk -F '|' '{ printf "%s%s", (NR>1?", ":""), $1 }')
 
     # ---- roots (profile) ----
     ROOT_LIST=''
@@ -386,6 +385,60 @@ EOF
         [ -z "$ROOT_LIST" ] && [ $ALREADY -eq 1 ] && say 'Perfil "ufba" ja existe: mantenho as pastas (roots) que ele ja tem.'
     elif [ -n "$ROOTS" ]; then warn '--root so vale no modo perfil; ignorado.'; fi
 
+    # ---- hooks por repositorio (profile; so leitura): repo onde o instalador roda + repos git dentro dos roots ----
+    REPO_HOOKED=''
+    if [ "$MODE" = profile ]; then
+        _cands=$(cur_repo)
+        while IFS= read -r _r; do
+            [ -n "$_r" ] || continue
+            _cands="${_cands:+$_cands
+}$(find_repos "$_r" 0)"
+        done <<EOF
+$ROOT_LIST
+EOF
+        while IFS= read -r _r; do
+            [ -n "$_r" ] && repo_has_hooks "$_r" && REPO_HOOKED="${REPO_HOOKED:+$REPO_HOOKED
+}$_r"
+        done <<EOF
+$(printf '%s\n' "$_cands" | awk 'NF && !seen[$0]++')
+EOF
+        if [ -n "$REPO_HOOKED" ]; then
+            say ''
+            say 'Repositorios com hooks do ai-memory instalados por voce (escopo project; eu so leio, nao altero):'
+            printf '%s\n' "$REPO_HOOKED" | while IFS= read -r _r; do say "  - $_r"; done
+        fi
+    fi
+
+    say 'Agentes encontrados:'
+    CHOSEN=''
+    while IFS='|' read -r _l _d _e; do
+        if [ "$MODE" = profile ] && ! has_hooks "$_d" && [ -z "$REPO_HOOKED" ]; then
+            say "  - $_l: SEM hooks do ai-memory; vou pular (veja as opcoes abaixo)."
+            SKIPPED_NO_HOOKS=1
+            continue
+        fi
+        if [ "$MODE" = profile ] && ! has_hooks "$_d"; then say "  - $_l: sem hooks globais; vale o que voce instalou nos repositorios acima."; fi
+        if confirm_item "  Conectar $_l ($_d)?"; then CHOSEN="${CHOSEN:+$CHOSEN
+}$_l|$_d|$_e"; else say "  (pulado: $_l)"; fi
+    done <<EOF
+$TARGETS
+EOF
+    if [ -n "${SKIPPED_NO_HOOKS:-}" ]; then
+        say ''
+        say 'Para conectar um agente sem hooks, instale os hooks do ai-memory (este instalador nunca roda install-hooks no modo perfil) e rode este instalador de novo:'
+        say "  1. (recomendada) so nos repos da ufba: dentro de cada repo do ufba-app rode 'ai-memory install-hooks --agent claude-code --scope project --apply' e rode este instalador de novo, dentro desse repo ou com --root apontando para a pasta dos repos. O instalador reconhece os hooks do repo (precisa do .ai-memory.toml com server = \"ufba\" para capturar para a ufba.app)."
+        say "  2. global, so com marcador: 'ai-memory install-hooks --agent claude-code --apply --capture-mode allowlist'. ATENCAO: o modo allowlist vale tambem para o seu servidor pessoal; repos sem .ai-memory.toml deixam de capturar."
+        say "  (conta do Maestri na opcao 2: rode com a variavel CLAUDE_CONFIG_DIR apontando para a pasta da conta.)"
+    fi
+    for _o in .codex .gemini .cursor; do
+        [ -d "$HOME_DIR/$_o" ] && say "  - $_o encontrado, mas nao conectado: esse agente usa scripts que nao roteiam perfil de servidor."
+    done
+    if [ -z "$CHOSEN" ]; then
+        [ "$MODE" = profile ] && stop_planned 'Nenhum agente com hooks do ai-memory foi selecionado. O modo perfil so conecta agentes que ja tem os hooks do ai-memory: instale-os por uma das opcoes acima e rode de novo.'
+        stop_planned 'Nenhum agente selecionado.'
+    fi
+    LABELS=$(printf '%s\n' "$CHOSEN" | awk -F '|' '{ printf "%s%s", (NR>1?", ":""), $1 }')
+
     NAME=$CNAME; [ -n "$NAME" ] || NAME=$(hostname 2>/dev/null || true); [ -n "$NAME" ] || NAME=computador
 
     # ---- plano ----
@@ -398,6 +451,7 @@ EOF
     else
         say "  - registrar o perfil de servidor 'ufba' no ai-memory existente (dados em $DATA_DIR)${ROOT_LIST:+, roots: $(printf '%s' "$ROOT_LIST" | tr '\n' ' ')}"
         say '  - NAO mexer nos hooks, no servidor padrao nem no modo de captura'
+        [ -n "$REPO_HOOKED" ] && say "  - reconhecer os hooks que voce instalou em $(printf '%s\n' "$REPO_HOOKED" | wc -l | tr -d ' ') repositorio(s) (so leitura; sem install-hooks, sem tocar no .git)"
     fi
     say "  - registrar o MCP \"ufba\" ($MCP_URL) em: $LABELS"
     say "  - guardar o id deste computador em $STATE_FILE (sem segredo)"
@@ -580,6 +634,27 @@ EOF
                     *) warn 'o teste de captura nao devolveu server_resolution = marker (confira a pasta autorizada e rode: ai-memory hook --check-capture).' ;; esac
             fi
         fi
+        # repos com hooks (escopo project): captura de verdade de cada um, so leitura
+        REPO_OK=''; REPO_NO=''
+        while IFS= read -r _rh; do
+            [ -n "$_rh" ] || continue
+            _cc=$(cd "$_rh" && printf '{}' | "$AIM" --data-dir "$DATA_DIR" hook --event user-prompt-submit --agent claude-code --check-capture 2>&1) || true
+            case "$_cc" in
+                *'"server_resolution":"marker"'*|*'"server_resolution": "marker"'*) REPO_OK="${REPO_OK:+$REPO_OK
+}$_rh" ;;
+                *) _res=$(printf '%s' "$_cc" | sed -n 's/.*"server_resolution"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+                   REPO_NO="${REPO_NO:+$REPO_NO
+}$_rh (${_res:-sem resposta})" ;;
+            esac
+        done <<EOF
+$REPO_HOOKED
+EOF
+        if [ -n "$REPO_OK" ]; then say '  ok: capturam para a ufba.app (hooks do repo + marcador server = "ufba" dentro da pasta autorizada):'; printf '%s\n' "$REPO_OK" | while IFS= read -r _x; do say "      - $_x"; done; fi
+        if [ -n "$REPO_NO" ]; then
+            warn 'estes repositorios tem hooks, mas NAO capturam para a ufba.app ainda:'
+            printf '%s\n' "$REPO_NO" | while IFS= read -r _x; do say "      - $_x"; done
+            say '      Confira se o repo tem .ai-memory.toml com server = "ufba" e se esta dentro da pasta autorizada (--root).'
+        fi
         KEYFILE="$DATA_DIR/auth-tokens/ufba"
     else
         say '  ok: hooks gravados (servidor padrao = ufba.app, captura so em repositorios com marcador).'
@@ -598,6 +673,7 @@ EOF
     say "Modo: $MODE    Computador: $NAME    Id: $COMPUTER_ID"
     if [ "$MODE" = fresh ]; then say "- ai-memory $AIM_VERSION em $LIB_DIR; hooks gravados em: $LABELS"
     else say "- perfil \"ufba\" registrado${ROOT_LIST:+ (roots: $(printf '%s' "$ROOT_LIST" | tr '\n' ' '))}; seus hooks e servidor padrao ficaram como estavam"; fi
+    if [ "$MODE" = profile ] && [ -n "$REPO_HOOKED" ]; then say "- repositorios com hooks reconhecidos (so leitura): $(printf '%s\n' "$REPO_HOOKED" | wc -l | tr -d ' '); capturam para a ufba.app: $(printf '%s\n' "$REPO_OK" | awk 'NF' | wc -l | tr -d ' ')"; fi
     say "- MCP \"ufba\" registrado em: ${MCP_OK:-(nenhuma conta)}"
     say "- id do computador (sem segredo): $STATE_FILE"
     if [ "$MODE" = profile ]; then
