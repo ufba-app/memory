@@ -69,7 +69,9 @@ No modo `profile` o instalador **para e explica, sem alterar nada**, quando:
 - o seu ai-memory é **menor que 3.4.6** (uma versão antiga ignora o perfil e mandaria a captura para o servidor padrão);
   o instalador nunca atualiza o ai-memory de ninguém;
 - há sinais de ai-memory mas o programa não foi encontrado;
-- o agente não tem hooks do ai-memory (instale os seus com `ai-memory install-hooks --apply` e rode de novo).
+- o agente não tem hooks do ai-memory. O instalador nunca roda `install-hooks` no modo `profile`; ele mostra as duas opções, e depois é só rodar o instalador de novo:
+  1. **(recomendada) só nos repos da ufba:** dentro de cada repo do ufba-app, `ai-memory install-hooks --agent claude-code --scope project --apply`. Os hooks valem só naquele repo.
+  2. **Global, só com marcador:** `ai-memory install-hooks --agent claude-code --apply --capture-mode allowlist`. Atenção: o modo `allowlist` vale também para o seu servidor pessoal; repositórios sem `.ai-memory.toml` deixam de capturar.
 
 ### Instalação não é o seu servidor padrão
 
