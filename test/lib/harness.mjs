@@ -208,6 +208,7 @@ export class World {
       child.stderr.on('data', (d) => { err += d; });
       const timer = setTimeout(() => child.kill(), 120_000);
       child.on('close', (code) => { clearTimeout(timer); resolve({ code, out, err, all: out + '\n' + err }); });
+      child.stdin.on('error', () => {}); // o script pode sair antes de ler o stdin (EPIPE)
       child.stdin.end(stdin);
     });
   }

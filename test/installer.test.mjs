@@ -25,7 +25,7 @@ for (const adapter of Object.values(adapters)) {
     });
     const keyOf = (fakes) => fakes.state.issuedKeys.at(-1);
     // powershell.exe cria homeAppDataRoaming sozinho ao iniciar (ruido do interpretador, nao do instalador)
-    const dataSnapshot = (w) => snapshot(w.dir, [w.stub, path.join(w.home, 'AppData')]);
+    const dataSnapshot = (w) => snapshot(w.dir, [w.stub, path.join(w.home, 'AppData'), path.join(w.work, 'Microsoft')]);
     const call = (w, name, pred = () => true) => w.calls().filter((c) => c.name === name && pred(c));
     const argsOf = (c) => c.args.join(' ');
 
