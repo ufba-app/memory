@@ -22,7 +22,7 @@
 # Tudo roda dentro de main(), chamada na ultima linha: um download truncado nao executa nada.
 
 main() {
-    IV='1.0.0'
+    IV='1.0.1'
     PINNED_API='https://api.ufba.app'
     PINNED_MEMORY='https://memory.ufba.app'
     umask 077
@@ -334,7 +334,8 @@ Programa encontrado: $AIM"
     CHOSEN=''
     while IFS='|' read -r _l _d _e; do
         if [ "$MODE" = profile ] && ! has_hooks "$_d"; then
-            say "  - $_l: SEM hooks do ai-memory; vou pular (instale os seus hooks com 'ai-memory install-hooks --apply' nessa conta e rode de novo)."
+            say "  - $_l: SEM hooks do ai-memory; vou pular (veja as opcoes abaixo)."
+            SKIPPED_NO_HOOKS=1
             continue
         fi
         if confirm_item "  Conectar $_l ($_d)?"; then CHOSEN="${CHOSEN:+$CHOSEN
@@ -342,11 +343,18 @@ Programa encontrado: $AIM"
     done <<EOF
 $TARGETS
 EOF
+    if [ -n "${SKIPPED_NO_HOOKS:-}" ]; then
+        say ''
+        say 'Para conectar um agente sem hooks, instale os hooks do ai-memory (este instalador nunca roda install-hooks no modo perfil) e rode este instalador de novo:'
+        say "  1. (recomendada) so nos repos da ufba: dentro de cada repo do ufba-app rode 'ai-memory install-hooks --agent claude-code --scope project --apply'. Os hooks valem so naquele repo."
+        say "  2. global, so com marcador: 'ai-memory install-hooks --agent claude-code --apply --capture-mode allowlist'. ATENCAO: o modo allowlist vale tambem para o seu servidor pessoal; repos sem .ai-memory.toml deixam de capturar."
+        say "  (conta do Maestri na opcao 2: rode com a variavel CLAUDE_CONFIG_DIR apontando para a pasta da conta.)"
+    fi
     for _o in .codex .gemini .cursor; do
         [ -d "$HOME_DIR/$_o" ] && say "  - $_o encontrado, mas nao conectado: esse agente usa scripts que nao roteiam perfil de servidor."
     done
     if [ -z "$CHOSEN" ]; then
-        [ "$MODE" = profile ] && stop_planned 'Nenhum agente com hooks do ai-memory foi selecionado. O modo perfil so conecta agentes que ja tem os hooks do ai-memory.'
+        [ "$MODE" = profile ] && stop_planned 'Nenhum agente com hooks do ai-memory foi selecionado. O modo perfil so conecta agentes que ja tem os hooks do ai-memory: instale-os por uma das opcoes acima e rode de novo.'
         stop_planned 'Nenhum agente selecionado.'
     fi
     LABELS=$(printf '%s\n' "$CHOSEN" | awk -F '|' '{ printf "%s%s", (NR>1?", ":""), $1 }')

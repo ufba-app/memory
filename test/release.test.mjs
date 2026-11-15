@@ -9,6 +9,9 @@ import { adapters, World, buildLauncher, tmpRoot, sha256, repo, isWin } from './
 import { startFakes } from './lib/servers.mjs';
 import { buildRelease, ASSETS } from '../tools/build-release.mjs';
 
+// A tag do teste acompanha a versao do instalador (o build recusa tag que nao bate).
+const INSTALLER_VERSION = /IV='([0-9.]+)'/.exec(fs.readFileSync(path.join(repo, 'installer', 'ufba-memory.sh'), 'utf8'))[1];
+const TAG = `installer-v${INSTALLER_VERSION}`;
 const root = tmpRoot();
 let launcher = null;
 let dist = null;
@@ -16,7 +19,7 @@ before(async () => {
   if (isWin) launcher = buildLauncher(root);
   const art = path.join(root, 'artifacts'); fs.mkdirSync(art);
   for (const f of Object.values(ASSETS)) fs.writeFileSync(path.join(art, f), `conteudo de teste de ${f}`);
-  dist = (await buildRelease({ out: path.join(root, 'dist'), artifactsDir: art, tag: 'installer-v1.0.0' }));
+  dist = (await buildRelease({ out: path.join(root, 'dist'), artifactsDir: art, tag: TAG }));
 });
 after(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
@@ -69,7 +72,7 @@ describe('tools/build-release.mjs', () => {
   });
 
   test('a linha de comando funciona (sem rede, com artefatos de teste)', () => {
-    const r = spawnSync(process.execPath, [path.join(repo, 'tools', 'build-release.mjs'), '--out', path.join(root, 'cli'), '--artifacts-dir', path.join(root, 'artifacts'), '--tag', 'installer-v1.0.0'], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [path.join(repo, 'tools', 'build-release.mjs'), '--out', path.join(root, 'cli'), '--artifacts-dir', path.join(root, 'artifacts'), '--tag', TAG], { encoding: 'utf8' });
     assert.equal(r.status, 0, r.stderr);
     assert.ok(fs.existsSync(path.join(root, 'cli', 'manifest.json')));
   });
@@ -102,7 +105,7 @@ for (const adapter of Object.values(adapters)) {
     scenario('recusa hash errado: baixa mas NAO executa', async (w, fakes) => {
       const sentinel = path.join(w.work, 'executou.txt');
       const evil = adapter.name === 'ps1' ? `Set-Content -Path '${sentinel}' -Value x\r\n` : `echo x > "${sentinel.replace(/\\/g, '/')}"\n`;
-      fakes.addFile(`installer-v1.0.0/${instName}`, Buffer.from(evil));
+      fakes.addFile(`${TAG}/${instName}`, Buffer.from(evil));
       const r = await w.runScript(fakes, path.join(dist.out, bootName), argv('yes'), { extraEnv: env(fakes) });
       assert.notEqual(r.code, 0, r.all);
       assert.match(r.all, /NAO confere/);
@@ -110,7 +113,7 @@ for (const adapter of Object.values(adapters)) {
     });
 
     scenario('hash certo: baixa o instalador versionado, confere e executa (dry-run ponta a ponta)', async (w, fakes) => {
-      fakes.addFile(`installer-v1.0.0/${instName}`, fs.readFileSync(path.join(dist.out, instName)));
+      fakes.addFile(`${TAG}/${instName}`, fs.readFileSync(path.join(dist.out, instName)));
       w.stubs('claude'); fs.mkdirSync(w.claudeDir, { recursive: true });
       const r = await w.runScript(fakes, path.join(dist.out, bootName), argv('yes', 'dry'), { extraEnv: env(fakes) });
       assert.equal(r.code, 0, r.all);
