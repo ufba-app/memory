@@ -60,7 +60,7 @@ repositório (só `github.com`), valida o formato, guarda 10 minutos e serve o �
 
 ## Cadeia de confiança na máquina da pessoa
 
-1. `ufba.app/install.ps1|sh` (bootstrap pequeno) baixa `ufba-memory.*` **do release do GitHub** (`installer-vX.Y.Z`, imutável)
+1. `memory.ufba.app/install.ps1|sh` (bootstrap pequeno) baixa `ufba-memory.*` **do release do GitHub** (`installer-vX.Y.Z`, imutável)
    e confere o SHA-256 embutido. Comprometer só a ufba.app ou só o GitHub não basta.
 2. O instalador pede o manifesto à API e confere que o **próprio** hash é o `installer.files[...]` do manifesto, e que a
    versão dele é ≥ `minVersion`. Divergiu: aborta antes de qualquer escrita ou login.
@@ -78,7 +78,10 @@ Risco residual aceito: comprometer o CI **ou** o GitHub e a ufba.app ao mesmo te
    release e o publica (não sobrescreve release existente).
 3. Atualizar o ai-memory = trocar o `VERSION` (isso reconstrói a imagem do servidor) **e** publicar um release novo do
    instalador (o manifesto é gerado nele). Suba `minVersion` quando um instalador antigo não puder mais rodar.
-4. `ufba.app/install.ps1|sh` devem servir os arquivos `install.ps1|sh` do **último** release (a ufba.app só repassa).
+4. `memory.ufba.app/install.ps1|sh` devem servir os arquivos `install.ps1|sh` do **último** release. Quem serve é uma
+   regra de redirecionamento (302) do Cloudflare, na zona `ufba.app` (Rules, Redirect Rules, "Redirecionamentos do
+   ufba.app"), para `https://github.com/ufba-app/memory/releases/latest/download/install.ps1|sh`. Não há nada a
+   fazer a cada release: `latest` já aponta para o mais novo. Teste com `curl -I https://memory.ufba.app/install.sh`.
 
 Localmente, sem rede e com artefatos de teste: `node tools/build-release.mjs --out dist --artifacts-dir <pasta>`.
 
