@@ -1,7 +1,7 @@
 ﻿<#
   Instalador da memoria compartilhada do ufba.app (Windows PowerShell 5.1+, sem dependencias, sem administrador).
 
-  Normalmente voce o recebe pelo bootstrap (irm https://ufba.app/install.ps1 | iex), que confere o SHA-256 antes de
+  Normalmente voce o recebe pelo bootstrap (irm https://memory.ufba.app/install.ps1 | iex), que confere o SHA-256 antes de
   executar. Para rodar na mao: baixe, leia, confira o hash publicado no release e execute.
 
     ufba-memory.ps1 [-DryRun] [-Yes] [-Root <pasta>[,<pasta>]] [-ComputerName <nome>] [-Uninstall]
@@ -31,7 +31,7 @@ param(
 function Invoke-UfbaMemory {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
-    $InstallerVersion = '1.0.2'
+    $InstallerVersion = '1.0.3'
     $PinnedApi = 'https://api.ufba.app'
     $PinnedMemory = 'https://memory.ufba.app'
     $dry = [bool]($DryRun -or $WhatIf)
@@ -308,7 +308,7 @@ function Invoke-UfbaMemory {
     $self = $PSCommandPath
     if ($self -and (Test-Path -LiteralPath $self)) { $selfHash = Get-FileSha256 $self }
     elseif ($env:UFBA_INSTALLER_SHA256 -match '^[0-9a-f]{64}$') { $selfHash = $env:UFBA_INSTALLER_SHA256 }
-    else { Fail 'nao consegui conferir o hash deste instalador; use o bootstrap (irm https://ufba.app/install.ps1 | iex) ou baixe o arquivo e rode como arquivo.' }
+    else { Fail 'nao consegui conferir o hash deste instalador; use o bootstrap (irm https://memory.ufba.app/install.ps1 | iex) ou baixe o arquivo e rode como arquivo.' }
     $expectSelf = [string]$manifest.installer.files.'install.ps1'
     if ($selfHash -ne $expectSelf.ToLowerInvariant()) {
         Fail 'o hash deste instalador nao confere com o manifesto da ufba.app. Nada foi instalado. Baixe de novo o instalador oficial.'

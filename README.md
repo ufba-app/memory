@@ -6,7 +6,7 @@ compilado com o console de gestão (`management-ui`). Roda em `https://memory.uf
 Este repositório tem duas coisas:
 
 1. a **receita da imagem do servidor** (workflow `image`), e
-2. o **instalador** que conecta o computador de uma pessoa a essa memória (`ufba.app/install.ps1` e `ufba.app/install.sh`).
+2. o **instalador** que conecta o computador de uma pessoa a essa memória (`memory.ufba.app/install.ps1` e `memory.ufba.app/install.sh`).
 
 Desenho do release (manifesto, bootstrap, quem gera o quê): [docs/release.md](docs/release.md).
 
@@ -17,22 +17,22 @@ Desenho do release (manifesto, bootstrap, quem gera o quê): [docs/release.md](d
 Windows (PowerShell 5.1 ou mais novo, sem administrador):
 
 ```powershell
-irm https://ufba.app/install.ps1 | iex
+irm https://memory.ufba.app/install.ps1 | iex
 ```
 
 Linux e macOS (sem sudo):
 
 ```sh
-curl -fsSL https://ufba.app/install.sh | sh
+curl -fsSL https://memory.ufba.app/install.sh | sh
 ```
 
 Com opções (veja "Opções" abaixo):
 
 ```powershell
-& ([scriptblock]::Create((irm https://ufba.app/install.ps1))) -Yes -Root C:\dev\ufba
+& ([scriptblock]::Create((irm https://memory.ufba.app/install.ps1))) -Yes -Root C:\dev\ufba
 ```
 ```sh
-curl -fsSL https://ufba.app/install.sh | sh -s -- --yes --root ~/dev/ufba
+curl -fsSL https://memory.ufba.app/install.sh | sh -s -- --yes --root ~/dev/ufba
 ```
 
 O instalador mostra um código no terminal; você abre o link, entra com o Google @ufba.br, confere que o código é o
@@ -124,7 +124,7 @@ Os hashes ficam no `SHA256SUMS` do mesmo release e no manifesto (`installer.file
 Windows:
 
 ```powershell
-$base = 'https://github.com/ufba-app/memory/releases/download/installer-v1.0.1'
+$base = 'https://github.com/ufba-app/memory/releases/download/installer-v1.0.3'
 Invoke-WebRequest "$base/ufba-memory.ps1" -OutFile ufba-memory.ps1
 Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
 (Get-FileHash .\ufba-memory.ps1 -Algorithm SHA256).Hash.ToLower()   # compare com a linha ufba-memory.ps1 do SHA256SUMS
@@ -135,7 +135,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\ufba-memory.ps1 -DryRun
 Linux e macOS:
 
 ```sh
-base=https://github.com/ufba-app/memory/releases/download/installer-v1.0.1
+base=https://github.com/ufba-app/memory/releases/download/installer-v1.0.3
 curl -fsSLO "$base/ufba-memory.sh" && curl -fsSLO "$base/SHA256SUMS"
 grep ' ufba-memory.sh$' SHA256SUMS | sha256sum -c -     # no macOS: shasum -a 256 -c -
 less ufba-memory.sh
@@ -148,10 +148,10 @@ se não bater. Assinatura dos releases (minisign) fica para uma etapa posterior.
 ## Desfazer
 
 ```powershell
-& ([scriptblock]::Create((irm https://ufba.app/install.ps1))) -Uninstall      # ou: .\ufba-memory.ps1 -Uninstall
+& ([scriptblock]::Create((irm https://memory.ufba.app/install.ps1))) -Uninstall      # ou: .\ufba-memory.ps1 -Uninstall
 ```
 ```sh
-curl -fsSL https://ufba.app/install.sh | sh -s -- uninstall                    # ou: sh ufba-memory.sh uninstall
+curl -fsSL https://memory.ufba.app/install.sh | sh -s -- uninstall                    # ou: sh ufba-memory.sh uninstall
 ```
 
 Remove **só o que o instalador instalou**, lendo `~/.ufba/computer.json`:

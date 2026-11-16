@@ -1,10 +1,10 @@
-# Bootstrap de https://ufba.app/install.ps1  (irm https://ufba.app/install.ps1 | iex)
+# Bootstrap de https://memory.ufba.app/install.ps1  (irm https://memory.ufba.app/install.ps1 | iex)
 #
 # Este arquivo so faz tres coisas: baixa o instalador VERSIONADO e IMUTAVEL do release do GitHub (ufba-app/memory),
 # confere o SHA-256 embutido aqui e o executa. Os marcadores @@...@@ abaixo sao trocados pelo CI (tools/build-release.mjs)
 # a cada release; no git eles ficam como placeholder e o bootstrap RECUSA rodar assim.
 # O instalador roda em memoria (sem salvar .ps1), entao a ExecutionPolicy padrao do Windows nao atrapalha.
-# Argumentos: & ([scriptblock]::Create((irm https://ufba.app/install.ps1))) -Yes -Root C:\dev\ufba
+# Argumentos: & ([scriptblock]::Create((irm https://memory.ufba.app/install.ps1))) -Yes -Root C:\dev\ufba
 # Tudo fica dentro de Install-UfbaMemory, chamada na ultima linha: um download truncado nao executa nada.
 
 function Install-UfbaMemory {
@@ -14,7 +14,7 @@ function Install-UfbaMemory {
     $base = 'https://github.com/ufba-app/memory/releases/download'
     $test = ($env:UFBA_INSTALLER_TEST -eq '1')
     if ($test -and $env:UFBA_RELEASE_BASE) { $base = $env:UFBA_RELEASE_BASE.TrimEnd('/') }
-    if ($version -like '*@@*' -or $expected -like '*@@*') { throw 'ufba: este bootstrap e um modelo (placeholder) e nao pode ser executado; use o de https://ufba.app/install.ps1' }
+    if ($version -like '*@@*' -or $expected -like '*@@*') { throw 'ufba: este bootstrap e um modelo (placeholder) e nao pode ser executado; use o de https://memory.ufba.app/install.ps1' }
     if ($expected -notmatch '^[0-9a-f]{64}$') { throw 'ufba: hash embutido invalido' }
     if (-not ($base -like 'https://*' -or ($test -and $base -like 'http://127.0.0.1*'))) { throw 'ufba: so aceito https' }
     if ($PSVersionTable.PSVersion.Major -lt 6) {

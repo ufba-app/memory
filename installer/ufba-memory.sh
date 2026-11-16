@@ -2,7 +2,7 @@
 # Instalador da memoria compartilhada do ufba.app (Linux e macOS; POSIX sh, sem dependencias alem de curl ou wget,
 # tar, e sha256sum/shasum/openssl). Sem root, sem sudo.
 #
-# Normalmente voce o recebe pelo bootstrap (curl -fsSL https://ufba.app/install.sh | sh), que confere o SHA-256 antes
+# Normalmente voce o recebe pelo bootstrap (curl -fsSL https://memory.ufba.app/install.sh | sh), que confere o SHA-256 antes
 # de executar. Para rodar na mao: baixe, leia, confira o hash publicado no release e rode `sh ufba-memory.sh`.
 #
 #   ufba-memory.sh [install|uninstall] [--dry-run] [--yes] [--root <pasta>]... [--computer-name <nome>]
@@ -22,7 +22,7 @@
 # Tudo roda dentro de main(), chamada na ultima linha: um download truncado nao executa nada.
 
 main() {
-    IV='1.0.2'
+    IV='1.0.3'
     PINNED_API='https://api.ufba.app'
     PINNED_MEMORY='https://memory.ufba.app'
     umask 077

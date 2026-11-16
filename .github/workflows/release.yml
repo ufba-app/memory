@@ -1,7 +1,7 @@
 # Release do instalador: gera o manifesto e os bootstraps a partir dos MESMOS arquivos (tools/build-release.mjs), baixa os
 # artefatos do ai-memory da tag do VERSION (calcula o sha256 dos bytes baixados) e anexa tudo ao release do GitHub.
 # O release e imutavel: a tag `installer-vX.Y.Z` tem que bater com a versao dentro dos instaladores, e o workflow nao
-# sobrescreve release existente. ufba.app/install.ps1|sh servem os bootstraps deste release; a API serve o manifesto.
+# sobrescreve release existente. memory.ufba.app/install.ps1|sh servem os bootstraps deste release; a API serve o manifesto.
 #   git tag installer-v1.0.0 && git push origin installer-v1.0.0
 # Em workflow_dispatch sem `tag` so gera os arquivos e os guarda como artefato do workflow (nada e publicado).
 name: release
